@@ -1,12 +1,8 @@
 """Unit tests for the Top-n-sigma custom logit processor example.
 
-Loads examples/runtime/custom_logit_processor/top_n_sigma.py via importlib so the
-real example code is tested (not a copy). No server, no model loading.
+Loads ``top_n_sigma.py`` from this directory via importlib so the real example
+code is tested (not a copy). No server, no model loading. Run with ``pytest``.
 """
-
-from sglang.test.ci.ci_register import register_cpu_ci
-
-register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 
 import importlib.util
 import unittest
@@ -16,13 +12,7 @@ import torch
 
 from sglang.test.test_utils import CustomTestCase
 
-_EXAMPLE_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "examples"
-    / "runtime"
-    / "custom_logit_processor"
-    / "top_n_sigma.py"
-)
+_EXAMPLE_PATH = Path(__file__).resolve().parent / "top_n_sigma.py"
 
 NEG = float("-inf")
 
@@ -101,6 +91,21 @@ class TestTopNSigmaExample(CustomTestCase):
         finite = torch.isfinite(out[0])
         self.assertEqual(int(finite.sum()), 1)
         self.assertTrue(bool(finite[top[0]]))
+
+    def test_low_precision_input_is_handled(self):
+        # In production, logits are upcast to fp32 before custom logit processors
+        # run (LogitsProcessor._copy_logits_to_buffer -> Sampler), so std/amax are
+        # always computed in fp32. This guards the processor's behavior even when
+        # it is handed low-precision logits directly: a dominant max is preserved,
+        # lower logits are masked, and the dtype is not silently changed.
+        # A clearly-separated max keeps argmax deterministic under fp16/bf16 rounding.
+        for dtype in (torch.float16, torch.bfloat16):
+            row = torch.tensor([[8.0, 2.0, 1.0, 0.0, -3.0]], dtype=dtype)
+            out = self._run(row, [{"top_n_sigma": 1.0}])
+            self.assertEqual(out.dtype, dtype, msg=str(dtype))
+            self.assertEqual(int(out.argmax(dim=-1)), 0, msg=str(dtype))
+            self.assertTrue(out[0, 0].isfinite(), msg=str(dtype))
+            self.assertTrue((out == NEG).any(), msg=str(dtype))
 
 
 if __name__ == "__main__":
